@@ -13,9 +13,12 @@ import (
 var log = logger.GetLogger("weather-pane")
 
 func main() {
+
+	// Create our pane. Must implement (github.com/ninjasphere/go-ninja/remote).pane
 	pane := main.NewWeatherPane()
 
-	tcpAddr, err := net.ResolveTCPAddr("tcp", config.String("localhost", "app-weather-pane.host")+":3115")
+	// Connect to the led controller remote pane interface (port 3115)
+	tcpAddr, err := net.ResolveTCPAddr("tcp", config.String("localhost", "led.host")+":3115")
 	if err != nil {
 		println("ResolveTCPAddr failed:", err.Error())
 		os.Exit(1)
@@ -27,6 +30,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Export our pane over this interface
 	matrix := remote.NewMatrix(pane, conn)
 
 	support.WaitUntilSignal()
