@@ -1,0 +1,9 @@
+{
+  "weather": {
+    "enabled": true,
+    "updateInterval": "1h",
+    "forecast.io": {
+      "apiKey": "CHANGEME"
+    }
+  }
+}

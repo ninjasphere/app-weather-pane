@@ -1,5 +1,5 @@
 {
-  "id": "com.ninjablocks.app-weather-pane",
+  "id": "com.ninjablocks.app.weather-pane",
   "name": "Weather Pane Application",
   "version": "0.1.0",
   "description": "Adds a weather pane to the LED matrix. Displays the weather forecast and temperature.",

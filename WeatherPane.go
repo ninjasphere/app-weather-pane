@@ -1,4 +1,4 @@
-package ui
+package main
 
 import (
 	"fmt"
@@ -8,19 +8,19 @@ import (
 	"time"
 
 	"github.com/bugsnag/bugsnag-go"
+	"github.com/ninjasphere/forecast/v2"
 	"github.com/ninjasphere/gestic-tools/go-gestic-sdk"
 	"github.com/ninjasphere/go-ninja/api"
 	"github.com/ninjasphere/go-ninja/config"
 	"github.com/ninjasphere/go-ninja/model"
-	owm "github.com/ninjasphere/openweathermap"
 	"github.com/ninjasphere/sphere-go-led-controller/fonts/O4b03b"
-	"github.com/ninjasphere/sphere-go-led-controller/fonts/clock"
 	"github.com/ninjasphere/sphere-go-led-controller/util"
 )
 
-var enableWeatherPane = config.MustBool("led.weather.enabled")
-var weatherUpdateInterval = config.MustDuration("led.weather.updateInterval")
-var temperatureDisplayTime = config.Duration(time.Second*5, "led.weather.temperatureDisplayTime")
+var enableWeatherPane = config.MustBool("weather.enabled")
+var weatherUpdateInterval = config.MustDuration("weather.updateInterval")
+var temperatureDisplayTime = config.Duration(time.Second*5, "weather.temperatureDisplayTime")
+var apiKey = config.MustString("weather.forecast.io.apiKey")
 
 var globalSite *model.Site
 var timezone *time.Location
@@ -31,7 +31,7 @@ type WeatherPane struct {
 	getWeather  *time.Timer
 	tempTimeout *time.Timer
 	temperature bool
-	weather     *owm.ForecastWeatherData
+	forecast    *forecast.Forecast
 	image       util.Image
 }
 
@@ -50,36 +50,26 @@ func NewWeatherPane(conn *ninja.Connection) *WeatherPane {
 		return pane
 	}
 
-	var err error
-	pane.weather, err = owm.NewForecast("C")
-	if err != nil {
-		log.Warningf("Failed to load weather api:", err)
-		enableWeatherPane = false
-	} else {
-		go pane.GetWeather()
-	}
+	go pane.GetWeather()
 
 	return pane
 }
 
+func (p *WeatherPane) KeepAwake() bool {
+	return false
+}
+
 func (p *WeatherPane) GetWeather() {
+
+	var latitude, longitude string
 
 	enableWeatherPane = false
 
 	for {
 		site := &model.Site{}
 		err := p.siteModel.Call("fetch", config.MustString("siteId"), site, time.Second*5)
-
 		if err == nil && (site.Longitude != nil || site.Latitude != nil) {
-			p.site = site
-			globalSite = site
-
-			if site.TimeZoneID != nil {
-				if timezone, err = time.LoadLocation(*site.TimeZoneID); err != nil {
-					log.Warningf("error while setting timezone (%s): %s", *site.TimeZoneID, err)
-					timezone, _ = time.LoadLocation("Local")
-				}
-			}
+			latitude, longitude = fmt.Sprintf("%f", *site.Latitude), fmt.Sprintf("%f", *site.Longitude)
 			break
 		}
 
@@ -90,22 +80,20 @@ func (p *WeatherPane) GetWeather() {
 
 	for {
 
-		p.weather.DailyByCoordinates(
-			&owm.Coordinates{
-				Longitude: *p.site.Longitude,
-				Latitude:  *p.site.Latitude,
-			},
-			1,
-		)
+		f, err := forecast.Get(apiKey, latitude, longitude, "now", forecast.AUTO)
 
-		if len(p.weather.List) > 0 {
+		if err != nil {
+			log.Fatalf("Failed to get weather", err)
+		} else {
 
-			filename := util.ResolveImagePath("weather/" + p.weather.List[0].Weather[0].Icon + ".png")
+			p.forecast = f
+
+			filename := util.ResolveImagePath("weather-skycons/clear-day.gif")
 
 			if _, err := os.Stat(filename); os.IsNotExist(err) {
 				enableWeatherPane = false
 				fmt.Printf("Couldn't load image for weather: %s", filename)
-				bugsnag.Notify(fmt.Errorf("Unknown weather icon: %s", filename), p.weather)
+				bugsnag.Notify(fmt.Errorf("Unknown weather icon: %s", filename), p.forecast)
 			} else {
 				p.image = util.LoadImage(filename)
 				enableWeatherPane = true
@@ -113,13 +101,12 @@ func (p *WeatherPane) GetWeather() {
 		}
 
 		time.Sleep(weatherUpdateInterval)
-
 	}
 
 }
 
 func (p *WeatherPane) IsEnabled() bool {
-	return enableWeatherPane && p.weather.Unit != ""
+	return enableWeatherPane && p.forecast.Timezone != ""
 }
 
 func (p *WeatherPane) Gesture(gesture *gestic.GestureMessage) {
@@ -136,21 +123,27 @@ func (p *WeatherPane) Render() (*image.RGBA, error) {
 		img := image.NewRGBA(image.Rect(0, 0, 16, 16))
 
 		drawText := func(text string, col color.RGBA, top int) {
-			width := clock.Font.DrawString(img, 0, 8, text, color.Black)
-			start := int(16 - width - 2)
+			width := O4b03b.Font.DrawString(img, 0, 8, text, color.Black)
+			start := int(16 - width - 1)
 
 			//spew.Dump("text", text, "width", width, "start", start)
 
 			O4b03b.Font.DrawString(img, start, top, text, col)
 		}
 
-		if p.weather.City.Country == "US" || p.weather.City.Country == "United States of America" {
-			drawText(fmt.Sprintf("%dF", int(p.weather.List[0].Temp.Max*(9.0/5)-459.67)), color.RGBA{253, 151, 32, 255}, 1)
-			drawText(fmt.Sprintf("%dF", int(p.weather.List[0].Temp.Min*(9.0/5)-459.67)), color.RGBA{69, 175, 249, 255}, 8)
+		today := p.forecast.Daily.Data[0]
+
+		var min, max string
+		if p.forecast.Flags.Units == "us" {
+			min = fmt.Sprintf("%dF", int(today.TemperatureMin))
+			max = fmt.Sprintf("%dF", int(today.TemperatureMax))
 		} else {
-			drawText(fmt.Sprintf("%dC", int(p.weather.List[0].Temp.Max-273.15)), color.RGBA{253, 151, 32, 255}, 1)
-			drawText(fmt.Sprintf("%dC", int(p.weather.List[0].Temp.Min-273.15)), color.RGBA{69, 175, 249, 255}, 8)
+			min = fmt.Sprintf("%dC", int(today.TemperatureMin))
+			max = fmt.Sprintf("%dC", int(today.TemperatureMax))
 		}
+
+		drawText(max, color.RGBA{253, 151, 32, 255}, 3)
+		drawText(min, color.RGBA{69, 175, 249, 255}, 10)
 
 		return img, nil
 	} else {

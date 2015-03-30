@@ -1,9 +1,9 @@
 package main
 
 import (
-	"net"
-	"os"
+	"fmt"
 
+	"github.com/ninjasphere/go-ninja/api"
 	"github.com/ninjasphere/go-ninja/config"
 	"github.com/ninjasphere/go-ninja/logger"
 	"github.com/ninjasphere/go-ninja/support"
@@ -12,26 +12,49 @@ import (
 
 var log = logger.GetLogger("weather-pane")
 
+var host = config.String("localhost", "led.host")
+var port = config.Int(3115, "led.remote.port")
+
 func main() {
 
-	// Create our pane. Must implement (github.com/ninjasphere/go-ninja/remote).pane
-	pane := main.NewWeatherPane()
-
-	// Connect to the led controller remote pane interface (port 3115)
-	tcpAddr, err := net.ResolveTCPAddr("tcp", config.String("localhost", "led.host")+":3115")
+	app := &App{}
+	err := app.Init(info)
 	if err != nil {
-		println("ResolveTCPAddr failed:", err.Error())
-		os.Exit(1)
+		app.Log.Fatalf("failed to initialize app: %v", err)
 	}
 
-	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	err = app.Export(app)
 	if err != nil {
-		println("Dial failed:", err.Error())
-		os.Exit(1)
+		app.Log.Fatalf("failed to export app: %v", err)
 	}
-
-	// Export our pane over this interface
-	matrix := remote.NewMatrix(pane, conn)
 
 	support.WaitUntilSignal()
+}
+
+var info = ninja.LoadModuleInfo("./package.json")
+
+type Config struct {
+}
+
+type App struct {
+	support.AppSupport
+	led *remote.Matrix
+}
+
+func (a *App) Start(cfg *Config) error {
+
+	// Create our pane. Must implement (github.com/ninjasphere/go-ninja/remote).pane
+	pane := NewWeatherPane(a.Conn)
+
+	// Export our pane over this interface
+	a.led = remote.NewTCPMatrix(pane, fmt.Sprintf("%s:%d", host, port))
+
+	return nil
+}
+
+// Stop the security light app.
+func (a *App) Stop() error {
+	a.led.Close()
+	a.led = nil
+	return nil
 }
